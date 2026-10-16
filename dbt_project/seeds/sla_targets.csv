@@ -1,0 +1,5 @@
+priority,response_minutes,resolution_hours
+P1,15,4
+P2,60,8
+P3,240,24
+P4,480,72

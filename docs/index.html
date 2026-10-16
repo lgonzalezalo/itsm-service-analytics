@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ITSM Service Analytics</title>
+<style>
+  :root { --bg:#fff; --fg:#18181b; --muted:#71717a; --card:#fafafa; --line:#e4e4e7; --accent:#2563eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#09090b; --fg:#fafafa; --muted:#a1a1aa; --card:#18181b; --line:#3f3f46; --accent:#60a5fa; }
+  }
+  body { font:16px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); margin:0; }
+  main { max-width:1000px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { margin:0 0 4px; } h2 { margin:40px 0 4px; }
+  .muted { color:var(--muted); font-size:14px; margin:0 0 16px; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 16px; }
+  .kpi b { display:block; font-size:28px; } .kpi span { color:var(--muted); font-size:13px; }
+  table { border-collapse:collapse; width:100%; font-size:14px; }
+  th, td { border-bottom:1px solid var(--line); padding:6px 8px; text-align:right; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align:left; }
+  .chart { overflow-x:auto; }
+  .warn { color:#d97706; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ITSM Service Analytics</h1>
+  <p class="muted">Synthetic data (5,000 tickets, Jan–Jun 2026). SLA targets are my own assumptions, not a client's.</p>
+
+  <h2>1. Service health</h2>
+  <p class="muted">Rates are weighted by ticket count. P90 cannot be combined across groups, so it is shown per team and priority.</p>
+  <div class="kpis" id="kpis"></div>
+  <div class="chart" id="sla-trend"></div>
+  <div id="sla-table"></div>
+
+  <h2>2. Load per team</h2>
+  <p class="muted">Tickets opened per month, and effort booked per team. Effort is a field I invented in the generator (minutes actually worked), not elapsed time.</p>
+  <div class="chart" id="load-tickets"></div>
+  <div class="chart" id="load-effort"></div>
+
+  <h2>3. Automation candidates</h2>
+  <p class="muted">Ranked by total effort booked (resolved tickets only, uncategorised excluded). This ranking reflects the generator's parameters, and it does not score how automatable each case is.</p>
+  <div class="chart" id="pareto"></div>
+  <div class="chart" id="volume-vs-effort"></div>
+  <div id="cand-table"></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6.16/dist/plot.umd.min.js"></script>
+<script>
+const pct = x => (x * 100).toFixed(1) + "%";
+const sum = (rows, k) => rows.reduce((a, r) => a + r[k], 0);
+const wavg = (rows, k) => sum(rows.map(r => ({ v: r[k] * r.tickets })), "v") / sum(rows, "tickets");
+const month = s => s.slice(0, 7);
+
+async function load(name) { return (await fetch(`data/${name}.json`)).json(); }
+
+async function block1() {
+  const sla = await load("sla");
+
+  document.getElementById("kpis").innerHTML = [
+    [sum(sla, "tickets").toLocaleString(), "tickets opened"],
+    [pct(wavg(sla, "resolution_sla_rate")), "resolution SLA met"],
+    [pct(wavg(sla, "response_sla_rate")), "response SLA met"],
+    [sum(sla, "open_tickets").toLocaleString(), "still open at cut-off"],
+  ].map(([v, l]) => `<div class="kpi"><b>${v}</b><span>${l}</span></div>`).join("");
+
+  const trend = d3.rollups(sla, g => wavg(g, "resolution_sla_rate"), r => month(r.opened_month), r => r.priority)
+    .flatMap(([m, ps]) => ps.map(([p, v]) => ({ month: m, priority: p, rate: v })));
+  document.getElementById("sla-trend").replaceChildren(Plot.plot({
+    title: "Resolution SLA met, by month and priority",
+    width: 900, height: 320, marginLeft: 50,
+    y: { label: "SLA met", tickFormat: "%", domain: [0, 1], grid: true },
+    x: { label: null },
+    color: { legend: true, domain: ["P1", "P2", "P3", "P4"] },
+    marks: [Plot.lineY(trend, { x: "month", y: "rate", stroke: "priority", marker: "dot" })],
+  }));
+
+  const rows = d3.rollups(sla, g => ({
+    tickets: sum(g, "tickets"), res: wavg(g, "resolution_sla_rate"), mttr: wavg(g, "mttr_hours"),
+    p90: d3.max(g, r => r.p90_resolution_hours), reopen: wavg(g, "reopen_rate"),
+  }), r => r.team, r => r.priority).flatMap(([t, ps]) => ps.map(([p, v]) => ({ team: t, priority: p, ...v })))
+    .sort((a, b) => a.team.localeCompare(b.team) || a.priority.localeCompare(b.priority));
+  document.getElementById("sla-table").innerHTML = `<table>
+    <tr><th>Team</th><th>Priority</th><th>Tickets</th><th>Resolution SLA</th><th>MTTR (h)</th><th>Worst monthly P90 (h)</th><th>Reopen</th></tr>
+    ${rows.map(r => `<tr><td>${r.team}</td><td>${r.priority}</td>
+      <td class="${r.tickets < 30 ? "warn" : ""}">${r.tickets}${r.tickets < 30 ? " ⚠" : ""}</td>
+      <td>${pct(r.res)}</td><td>${r.mttr.toFixed(1)}</td><td>${r.p90.toFixed(1)}</td><td>${pct(r.reopen)}</td></tr>`).join("")}
+  </table><p class="muted">⚠ fewer than 30 tickets: read with caution. "Worst monthly P90" is the highest monthly value, not a combined P90.</p>`;
+}
+
+async function block2() {
+  const load2 = (await load("team_load")).map(r => ({ ...r, month: month(r.opened_month) }));
+  document.getElementById("load-tickets").replaceChildren(Plot.plot({
+    title: "Tickets opened per month, by team",
+    width: 900, height: 320, marginLeft: 50,
+    x: { label: null }, y: { label: "tickets", grid: true },
+    color: { legend: true },
+    marks: [Plot.barY(load2, { x: "month", y: "tickets", fill: "team" }), Plot.ruleY([0])],
+  }));
+
+  const byTeam = d3.rollups(load2, g => ({ tickets: sum(g, "tickets"), hours: sum(g, "effort_hours") }), r => r.team)
+    .map(([team, v]) => ({ team, ...v, perTicket: v.hours * 60 / v.tickets }));
+  document.getElementById("load-effort").replaceChildren(Plot.plot({
+    title: "Effort booked per team (hours) — label: avg minutes per ticket",
+    width: 900, height: 240, marginLeft: 100,
+    x: { label: "hours", grid: true }, y: { label: null },
+    marks: [
+      Plot.barX(byTeam, { y: "team", x: "hours", fill: "var(--accent)", sort: { y: "-x" } }),
+      Plot.text(byTeam, { y: "team", x: "hours", text: d => `${Math.round(d.hours)} h · ${d.perTicket.toFixed(0)} min/ticket`, dx: 6, textAnchor: "start" }),
+    ],
+  }));
+}
+
+async function block3() {
+  const c = await load("automation");
+
+  document.getElementById("pareto").replaceChildren(Plot.plot({
+    title: "Effort by subcategory (hours) — label: cumulative share of total effort",
+    width: 900, height: 420, marginLeft: 120, marginRight: 70,
+    x: { label: "hours", grid: true }, y: { label: null },
+    color: { legend: true },
+    marks: [
+      Plot.barX(c, { y: "subcategory", x: "total_effort_hours", fill: "team", sort: { y: "-x" } }),
+      Plot.text(c, { y: "subcategory", x: "total_effort_hours", text: d => pct(d.cumulative_share), dx: 6, textAnchor: "start" }),
+    ],
+  }));
+
+  document.getElementById("volume-vs-effort").replaceChildren(Plot.plot({
+    title: "Volume vs effort per ticket (bubble size = total effort)",
+    width: 900, height: 420, marginLeft: 60,
+    x: { label: "tickets resolved", grid: true }, y: { label: "avg minutes per ticket", grid: true },
+    r: { range: [4, 28] },
+    color: { legend: true },
+    marks: [
+      Plot.dot(c, { x: "tickets", y: "mean_effort_minutes", r: "total_effort_hours", fill: "team", fillOpacity: 0.7, stroke: "team" }),
+      Plot.text(c, { x: "tickets", y: "mean_effort_minutes", text: "subcategory", dy: -14, fontSize: 11 }),
+    ],
+  }));
+
+  const rows = [...c].sort((a, b) => a.automation_rank - b.automation_rank);
+  document.getElementById("cand-table").innerHTML = `<table>
+    <tr><th>#</th><th>Subcategory</th><th>Team</th><th>Tickets</th><th>Vol. rank</th><th>Effort (h)</th><th>Resolution (h)</th><th>Reopen</th><th>Linked to problem</th><th>Breach</th></tr>
+    ${rows.map(r => `<tr><td>${r.automation_rank}</td><td>${r.subcategory}</td><td>${r.team}</td><td>${r.tickets}</td><td>${r.volume_rank}</td>
+      <td>${Math.round(r.total_effort_hours)}</td><td>${r.mean_resolution_hours.toFixed(1)}</td>
+      <td>${pct(r.reopen_rate)}</td><td>${pct(r.problem_link_rate)}</td><td>${pct(r.resolution_breach_rate)}</td></tr>`).join("")}
+  </table><p class="muted">Reopen, problem-link and breach rates are not part of the ranking: use them to question it. A high-effort case with many problem links may need a fix at the root, not a script.</p>`;
+}
+
+block1();
+block2();
+block3();
+</script>
+</body>
+</html>

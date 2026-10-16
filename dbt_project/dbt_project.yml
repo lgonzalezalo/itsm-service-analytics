@@ -1,0 +1,15 @@
+name: itsm
+version: "1.0.0"
+config-version: 2
+profile: itsm
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+
+models:
+  itsm:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

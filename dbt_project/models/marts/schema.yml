@@ -1,0 +1,27 @@
+version: 2
+
+models:
+  - name: fct_tickets
+    description: One row per incident with timings and SLA outcome.
+    columns:
+      - name: ticket_id
+        data_tests: [unique, not_null]
+      - name: response_sla_met
+        description: True if the first response came within the priority target.
+      - name: resolution_sla_met
+        description: >
+          True/false for resolved tickets. For open tickets, false once the target
+          is exceeded as of the cut-off date, otherwise null (undetermined).
+
+  - name: fct_sla
+    description: SLA rates, MTTR and backlog by month, team and priority.
+
+  - name: automation_candidates
+    description: >
+      Subcategories ranked by total hands-on effort hours on resolved tickets.
+      volume_rank and mean_resolution_hours are shown for contrast, not scored.
+    columns:
+      - name: automation_rank
+        data_tests: [unique, not_null]
+      - name: subcategory
+        data_tests: [unique, not_null]

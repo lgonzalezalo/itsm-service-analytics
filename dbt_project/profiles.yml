@@ -1,0 +1,9 @@
+# Run dbt from the repo root so the relative paths below resolve:
+#   dbt build --project-dir dbt_project --profiles-dir dbt_project
+itsm:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: data/itsm.duckdb
+      threads: 4

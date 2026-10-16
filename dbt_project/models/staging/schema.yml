@@ -1,0 +1,40 @@
+version: 2
+
+models:
+  - name: stg_ticket_events
+    description: Append-only history, one row per ticket version (daily batches).
+    columns:
+      - name: ticket_id
+        data_tests: [not_null]
+      - name: updated_at
+        data_tests: [not_null]
+
+  - name: stg_tickets
+    columns:
+      - name: ticket_id
+        data_tests: [unique, not_null]
+      - name: priority
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["P1", "P2", "P3", "P4"]
+      - name: opened_at
+        data_tests: [not_null]
+      - name: problem_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_problems')
+                field: problem_id
+
+  - name: stg_problems
+    columns:
+      - name: problem_id
+        data_tests: [unique, not_null]
+
+seeds:
+  - name: sla_targets
+    columns:
+      - name: priority
+        data_tests: [unique, not_null]
